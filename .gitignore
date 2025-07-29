@@ -1,0 +1,14 @@
+# Python virtual environment
+venv/
+/venv/
+__pycache__/
+*.pyc
+
+# Environment variables
+# CRITICAL: This prevents your API key from being uploaded to GitHub
+.env
+
+# PyInstaller files
+/dist/
+/build/
+*.spec

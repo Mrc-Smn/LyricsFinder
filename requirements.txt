@@ -1,0 +1,7 @@
+requests
+beautifulsoup4
+mutagen
+lyricsgenius
+python-dotenv
+ddgs
+pyinstaller
