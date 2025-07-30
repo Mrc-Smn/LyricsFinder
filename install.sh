@@ -1,135 +1,106 @@
-#!/usr/bin/env python3
-"""
-Lyrics Scraper Cross-Platform Installer
-This script downloads and installs the Lyrics Scraper application with all dependencies.
-"""
+#!/bin/bash
 
-import os
-import sys
-import subprocess
-import shutil
-import platform
-import tempfile
-import urllib.request
-import zipfile
-from pathlib import Path
+# Lyrics Scraper Installer Script
+# This script installs the Lyrics Scraper application with all dependencies
+
+set -e  # Exit on any error
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
 # Configuration
-APP_NAME = "Lyrics Scraper"
-PYTHON_SCRIPT = "lyrics_scraper_app.py"
-REQUIREMENTS = ["requests", "beautifulsoup4", "mutagen", "lyricsgenius", "unidecode"]
-GITHUB_REPO = "https://github.com/Mrc-Smn/LyricsFinder"
-DOWNLOAD_URL = "https://github.com/Mrc-Smn/LyricsFinder/archive/refs/heads/main.zip"
+APP_NAME="Lyrics Scraper"
+INSTALL_DIR="$HOME/Applications"
+PYTHON_SCRIPT="lyrics_scraper_app.py"
+REQUIREMENTS="requirements.txt"
+ICON_FILE="icon.icns"
 
-class Colors:
-    """ANSI color codes for terminal output"""
-    RED = '\033[0;31m'
-    GREEN = '\033[0;32m'
-    YELLOW = '\033[1;33m'
-    BLUE = '\033[0;34m'
-    NC = '\033[0m'  # No Color
+echo -e "${BLUE}=== Lyrics Scraper Installer ===${NC}"
+echo ""
 
-    @classmethod
-    def disable_on_windows(cls):
-        """Disable colors on Windows if not supported"""
-        if platform.system() == "Windows":
-            cls.RED = cls.GREEN = cls.YELLOW = cls.BLUE = cls.NC = ''
+# Function to print colored output
+print_status() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
 
-def print_status(message):
-    print(f"{Colors.GREEN}[INFO]{Colors.NC} {message}")
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
 
-def print_warning(message):
-    print(f"{Colors.YELLOW}[WARNING]{Colors.NC} {message}")
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
 
-def print_error(message):
-    print(f"{Colors.RED}[ERROR]{Colors.NC} {message}")
+# Check if running on macOS
+if [[ "$OSTYPE" != "darwin"* ]]; then
+    print_error "This installer is designed for macOS. For other platforms, please run directly with Python."
+    exit 1
+fi
 
-def print_header():
-    print(f"{Colors.BLUE}=== Lyrics Scraper Installer ==={Colors.NC}")
-    print()
+# Check if Python 3 is installed
+if ! command -v python3 &> /dev/null; then
+    print_error "Python 3 is required but not installed."
+    echo "Please install Python 3 from https://www.python.org/downloads/"
+    exit 1
+fi
 
-def check_python():
-    """Check if Python 3.6+ is available"""
-    if sys.version_info < (3, 6):
-        print_error("Python 3.6 or higher is required.")
-        return False
+print_status "Python 3 found: $(python3 --version)"
 
-    print_status(f"Python {sys.version.split()[0]} found")
-    return True
+# Check if pip is available
+if ! command -v pip3 &> /dev/null; then
+    print_error "pip3 is required but not installed."
+    echo "Please install pip3 or reinstall Python 3 with pip included."
+    exit 1
+fi
 
-def check_pip():
-    """Check if pip is available"""
-    try:
-        import pip
-        return True
-    except ImportError:
-        try:
-            subprocess.run([sys.executable, "-m", "pip", "--version"],
-                         check=True, capture_output=True)
-            return True
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            print_error("pip is not available. Please install pip.")
-            return False
+# Create installation directory
+print_status "Creating installation directory: $INSTALL_DIR"
+mkdir -p "$INSTALL_DIR"
 
-def install_dependencies():
-    """Install required Python packages"""
-    print_status("Installing Python dependencies...")
+# Create app bundle directory
+APP_BUNDLE="$INSTALL_DIR/$APP_NAME.app"
+CONTENTS_DIR="$APP_BUNDLE/Contents"
+MACOS_DIR="$CONTENTS_DIR/MacOS"
+RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
-    for package in REQUIREMENTS:
-        try:
-            print(f"  Installing {package}...")
-            subprocess.run([
-                sys.executable, "-m", "pip", "install", "--user", package
-            ], check=True, capture_output=True)
-        except subprocess.CalledProcessError as e:
-            print_warning(f"Failed to install {package}: {e}")
-            return False
+print_status "Creating app bundle structure..."
+mkdir -p "$MACOS_DIR"
+mkdir -p "$RESOURCES_DIR"
 
-    print_status("Dependencies installed successfully")
-    return True
+# Install Python dependencies
+print_status "Installing Python dependencies..."
+pip3 install --user requests beautifulsoup4 mutagen lyricsgenius unidecode
 
-def get_install_dir():
-    """Get the appropriate installation directory for the OS"""
-    system = platform.system()
+# Copy application files
+print_status "Copying application files..."
+cp "$PYTHON_SCRIPT" "$MACOS_DIR/"
 
-    if system == "Darwin":  # macOS
-        return Path.home() / "Applications" / f"{APP_NAME}.app" / "Contents" / "MacOS"
-    elif system == "Windows":
-        return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "LyricsScraper"
-    else:  # Linux and others
-        return Path.home() / ".local" / "share" / "lyrics-scraper"
+# Copy icon if it exists
+if [ -f "$ICON_FILE" ]; then
+    cp "$ICON_FILE" "$RESOURCES_DIR/"
+    ICON_NAME=$(basename "$ICON_FILE")
+else
+    print_warning "Icon file not found. App will use default icon."
+    ICON_NAME=""
+fi
 
-def create_macos_app(install_dir):
-    """Create macOS app bundle structure"""
-    app_bundle = install_dir.parent.parent
-    contents_dir = app_bundle / "Contents"
-    resources_dir = contents_dir / "Resources"
-
-    # Create directories
-    install_dir.mkdir(parents=True, exist_ok=True)
-    resources_dir.mkdir(parents=True, exist_ok=True)
-
-    # Copy icon if it exists
-    icon_files = ["icon.icns", "icon.ico", "icon.png"]
-    icon_copied = False
-    for icon_name in icon_files:
-        if Path(icon_name).exists():
-            shutil.copy2(icon_name, resources_dir / icon_name)
-            icon_copied = True
-            break
-
-    # Create Info.plist
-    info_plist = contents_dir / "Info.plist"
-    plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+# Create Info.plist
+print_status "Creating Info.plist..."
+cat > "$CONTENTS_DIR/Info.plist" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>launch.sh</string>
+    <string>lyrics_scraper</string>
     <key>CFBundleIdentifier</key>
     <string>com.lyricsscraper.app</string>
     <key>CFBundleName</key>
-    <string>{APP_NAME}</string>
+    <string>$APP_NAME</string>
     <key>CFBundleVersion</key>
     <string>1.0.0</string>
     <key>CFBundleShortVersionString</key>
@@ -140,6 +111,8 @@ def create_macos_app(install_dir):
     <string>APPL</string>
     <key>CFBundleSignature</key>
     <string>LSCR</string>
+$([ -n "$ICON_NAME" ] && echo "    <key>CFBundleIconFile</key>
+    <string>$ICON_NAME</string>")
     <key>LSMinimumSystemVersion</key>
     <string>10.12</string>
     <key>NSHighResolutionCapable</key>
@@ -147,263 +120,67 @@ def create_macos_app(install_dir):
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.music</string>
 </dict>
-</plist>"""
+</plist>
+EOF
 
-    with open(info_plist, 'w') as f:
-        f.write(plist_content)
+# Create launcher script
+print_status "Creating launcher script..."
+cat > "$MACOS_DIR/lyrics_scraper" << 'EOF'
+#!/bin/bash
 
-    return app_bundle
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-def create_launcher_script(install_dir):
-    """Create appropriate launcher script for the OS"""
-    system = platform.system()
+# Set up Python path to use user-installed packages
+export PYTHONPATH="$HOME/.local/lib/python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages:$PYTHONPATH"
 
-    if system == "Darwin":  # macOS
-        launcher = install_dir / "launch.sh"
-        launcher_content = f"""#!/bin/bash
-cd "$(dirname "$0")"
-python3 "{PYTHON_SCRIPT}"
-"""
-        with open(launcher, 'w') as f:
-            f.write(launcher_content)
-        launcher.chmod(0o755)
+# Change to the script directory
+cd "$SCRIPT_DIR"
 
-    elif system == "Windows":
-        # Create batch launcher
-        launcher = install_dir / "Launch Lyrics Scraper.bat"
-        launcher_content = f"""@echo off
-cd /d "{install_dir}"
-python "{PYTHON_SCRIPT}"
-pause
-"""
-        with open(launcher, 'w') as f:
-            f.write(launcher_content)
+# Run the Python application
+python3 lyrics_scraper_app.py
+EOF
 
-    else:  # Linux
-        launcher = install_dir / "launch.sh"
-        launcher_content = f"""#!/bin/bash
-cd "$(dirname "$0")"
-python3 "{PYTHON_SCRIPT}"
-"""
-        with open(launcher, 'w') as f:
-            f.write(launcher_content)
-        launcher.chmod(0o755)
+# Make launcher executable
+chmod +x "$MACOS_DIR/lyrics_scraper"
 
-def create_desktop_shortcut(install_dir):
-    """Create desktop shortcut"""
-    system = platform.system()
+# Create desktop shortcut option
+read -p "Would you like to create a desktop shortcut? (y/n): " create_shortcut
+if [[ $create_shortcut =~ ^[Yy]$ ]]; then
+    ln -sf "$APP_BUNDLE" "$HOME/Desktop/$APP_NAME.app"
+    print_status "Desktop shortcut created."
+fi
 
-    if system == "Darwin":  # macOS
-        app_bundle = install_dir.parent.parent
-        desktop = Path.home() / "Desktop"
-        shortcut = desktop / f"{APP_NAME}.app"
+# Create Applications folder shortcut
+if [ ! -e "/Applications/$APP_NAME.app" ]; then
+    ln -sf "$APP_BUNDLE" "/Applications/$APP_NAME.app" 2>/dev/null || true
+    if [ -e "/Applications/$APP_NAME.app" ]; then
+        print_status "Application added to /Applications folder."
+    else
+        print_warning "Could not create shortcut in /Applications (permission denied)."
+    fi
+fi
 
-        if not shortcut.exists():
-            try:
-                shortcut.symlink_to(app_bundle)
-                print_status("Desktop shortcut created")
-                return True
-            except OSError:
-                print_warning("Could not create desktop shortcut")
+# Set extended attributes to help with Gatekeeper
+print_status "Configuring security attributes..."
+xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 
-    elif system == "Windows":
-        # Create VBS script to make shortcut
-        desktop = Path.home() / "Desktop"
-        vbs_script = f"""
-Set WshShell = WScript.CreateObject("WScript.Shell")
-Set Shortcut = WshShell.CreateShortcut("{desktop}\\{APP_NAME}.lnk")
-Shortcut.TargetPath = "python"
-Shortcut.Arguments = "{install_dir}\\{PYTHON_SCRIPT}"
-Shortcut.WorkingDirectory = "{install_dir}"
-Shortcut.Description = "Lyrics Scraper - Find and save lyrics for your music"
-Shortcut.Save
-"""
-
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.vbs', delete=False) as f:
-            f.write(vbs_script)
-            vbs_path = f.name
-
-        try:
-            subprocess.run(['cscript', '//nologo', vbs_path], check=True, capture_output=True)
-            print_status("Desktop shortcut created")
-            return True
-        except subprocess.CalledProcessError:
-            print_warning("Could not create desktop shortcut")
-        finally:
-            os.unlink(vbs_path)
-
-    else:  # Linux
-        desktop = Path.home() / "Desktop"
-        desktop_file = desktop / f"{APP_NAME}.desktop"
-
-        desktop_content = f"""[Desktop Entry]
-Name={APP_NAME}
-Comment=Find and save lyrics for your music
-Exec=python3 "{install_dir}/{PYTHON_SCRIPT}"
-Path={install_dir}
-Terminal=false
-Type=Application
-Categories=AudioVideo;Audio;
-"""
-
-        try:
-            with open(desktop_file, 'w') as f:
-                f.write(desktop_content)
-            desktop_file.chmod(0o755)
-            print_status("Desktop shortcut created")
-            return True
-        except OSError:
-            print_warning("Could not create desktop shortcut")
-
-    return False
-
-def download_and_extract():
-    """Download and extract the application from GitHub"""
-    print_status("Downloading Lyrics Scraper from GitHub...")
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_path = Path(temp_dir)
-        zip_path = temp_path / "lyrics-scraper.zip"
-
-        try:
-            # Download the repository
-            urllib.request.urlretrieve(DOWNLOAD_URL, zip_path)
-            print_status("Download completed")
-
-            # Extract the zip file
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(temp_path)
-
-            # Find the extracted folder (it will be named LyricsFinder-main)
-            extracted_folders = [d for d in temp_path.iterdir() if d.is_dir() and d.name.startswith('LyricsFinder')]
-            if not extracted_folders:
-                print_error("Could not find extracted application files")
-                return None
-
-            source_dir = extracted_folders[0]
-
-            # Check if main script exists
-            if not (source_dir / PYTHON_SCRIPT).exists():
-                print_error(f"Main script '{PYTHON_SCRIPT}' not found in downloaded files")
-                return None
-
-            print_status("Files extracted successfully")
-            return source_dir
-
-        except Exception as e:
-            print_error(f"Failed to download application: {e}")
-            return None
-
-def main():
-    """Main installer function"""
-    # Disable colors on Windows if needed
-    if platform.system() == "Windows":
-        Colors.disable_on_windows()
-
-    print_header()
-    print(f"This installer will download and install Lyrics Scraper from:")
-    print(f"{Colors.BLUE}{GITHUB_REPO}{Colors.NC}")
-    print()
-
-    # Check prerequisites
-    if not check_python():
-        sys.exit(1)
-
-    if not check_pip():
-        sys.exit(1)
-
-    # Download and extract application
-    source_dir = download_and_extract()
-    if not source_dir:
-        sys.exit(1)
-
-    # Install dependencies
-    if not install_dependencies():
-        print_error("Failed to install dependencies.")
-        sys.exit(1)
-
-    # Get installation directory
-    install_dir = get_install_dir()
-    print_status(f"Installing to: {install_dir}")
-
-    # Create installation directory
-    install_dir.mkdir(parents=True, exist_ok=True)
-
-    # Handle macOS app bundle
-    if platform.system() == "Darwin":
-        app_bundle = create_macos_app(install_dir)
-
-    # Copy main script and any additional files
-    shutil.copy2(source_dir / PYTHON_SCRIPT, install_dir / PYTHON_SCRIPT)
-
-    # Copy icon files if they exist
-    icon_files = ["icon.icns", "icon.ico", "icon.png"]
-    for icon_name in icon_files:
-        icon_path = source_dir / icon_name
-        if icon_path.exists():
-            shutil.copy2(icon_path, install_dir / icon_name)
-            print_status(f"Copied {icon_name}")
-
-    # Copy README if it exists
-    readme_path = source_dir / "README.md"
-    if readme_path.exists():
-        shutil.copy2(readme_path, install_dir / "README.md")
-
-    print_status("Application files copied")
-
-    # Create launcher script
-    create_launcher_script(install_dir)
-    print_status("Launcher script created")
-
-    # Offer to create shortcuts
-    try:
-        create_shortcut = input("Would you like to create a desktop shortcut? (y/n): ").lower().startswith('y')
-        if create_shortcut:
-            create_desktop_shortcut(install_dir)
-    except (EOFError, KeyboardInterrupt):
-        print()
-        print_status("Skipping shortcut creation")
-
-    # Set permissions on macOS
-    if platform.system() == "Darwin":
-        try:
-            subprocess.run(['xattr', '-cr', str(app_bundle)], capture_output=True)
-            print_status("Security attributes configured")
-        except subprocess.CalledProcessError:
-            pass
-
-    print()
-    print_status("Installation completed successfully!")
-    print()
-    print(f"{Colors.BLUE}The Lyrics Scraper has been installed to:{Colors.NC}")
-    print(f"  {install_dir}")
-    print()
-
-    system = platform.system()
-    if system == "Darwin":
-        print(f"{Colors.BLUE}You can now:{Colors.NC}")
-        print("  • Find it in your Applications folder")
-        print("  • Run it from Spotlight (Cmd+Space, type 'Lyrics Scraper')")
-        if create_shortcut:
-            print("  • Use the desktop shortcut")
-        print()
-        print(f"{Colors.YELLOW}Note:{Colors.NC} If macOS shows a security warning when first running:")
-        print("  1. Right-click the app → Open → Open")
-        print("  2. Or go to System Preferences → Security & Privacy → General")
-        print("     and click 'Open Anyway'")
-    elif system == "Windows":
-        print(f"{Colors.BLUE}You can now run it by:{Colors.NC}")
-        if create_shortcut:
-            print("  • Using the desktop shortcut")
-        print(f"  • Running: {install_dir}\\Launch Lyrics Scraper.bat")
-    else:
-        print(f"{Colors.BLUE}You can now run it by:{Colors.NC}")
-        if create_shortcut:
-            print("  • Using the desktop shortcut")
-        print(f"  • Running: {install_dir}/launch.sh")
-
-    print()
-    print_status("Installation complete! Enjoy using Lyrics Scraper!")
-
-if __name__ == "__main__":
-    main()
+echo ""
+print_status "Installation completed successfully!"
+echo ""
+echo -e "${BLUE}The Lyrics Scraper has been installed to:${NC}"
+echo "  $APP_BUNDLE"
+echo ""
+echo -e "${BLUE}You can now:${NC}"
+echo "  • Find it in your Applications folder"
+echo "  • Run it from Spotlight (Cmd+Space, type 'Lyrics Scraper')"
+if [[ $create_shortcut =~ ^[Yy]$ ]]; then
+echo "  • Use the desktop shortcut"
+fi
+echo ""
+echo -e "${YELLOW}Note:${NC} If macOS shows a security warning when first running:"
+echo "  1. Right-click the app → Open → Open"
+echo "  2. Or go to System Preferences → Security & Privacy → General"
+echo "     and click 'Open Anyway'"
+echo ""
+print_status "Installation complete! Enjoy using Lyrics Scraper!"
