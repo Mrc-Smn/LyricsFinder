@@ -13,56 +13,102 @@ import threading
 import queue
 import time
 import random
+import lyricsgenius
+from unidecode import unidecode
 
 # --- Global setup ---
 message_queue = queue.Queue()
 SUPPORTED_EXTENSIONS = ('.mp3', '.flac', '.m4a', '.ogg')
 stop_event = threading.Event()
 
-# A list of common User-Agents to rotate through, making requests less uniform.
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5.2 Safari/605.1.15',
 ]
 
 
 def get_random_headers():
-    """Creates a dictionary of headers that looks like a real browser request."""
-    return {
-        'User-Agent': random.choice(USER_AGENTS),
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://www.google.com/',
-        'DNT': '1'
-    }
+    return {'User-Agent': random.choice(USER_AGENTS)}
 
 
 def log_message(message):
-    """Puts a message into the queue for the GUI to display."""
     message_queue.put(message)
 
 
 # --- Search and Utility Functions ---
 
 def clean_string(s):
-    """Removes parenthetical and feature tags from a string for better searching."""
+    """Cleans metadata by removing feature tags and parentheticals."""
     if not s: return ""
     s = re.sub(r"[\(\[].*?[\)\]]", "", s)
     s = re.sub(r"\b(feat|ft|with|featuring)\b.*", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"[^\w\s'-]", "", s)
-    return re.sub(r"\s+", " ", s).strip()
+    return s.strip()
 
 
-def get_search_url(session, site, artist, title):
-    """
-    Scrapes a search engine and intelligently selects the most relevant URL.
-    """
+def slugify(text):
+    """Converts text to a URL-friendly slug."""
+    text = unidecode(text).lower()
+    text = re.sub(r'[^a-z0-9]+', '-', text).strip('-')
+    return text
+
+
+def search_genius_api(artist, title, api_key):
+    """Searches for lyrics using the official Genius API."""
+    log_message("--- Trying Source: Genius API ---")
+    try:
+        genius = lyricsgenius.Genius(api_key, verbose=False, remove_section_headers=True, timeout=15)
+        song = genius.search_song(title, artist)
+        if song:
+            log_message("✓ Found song via Genius API.")
+            lyrics = re.sub(r'.*?Lyrics', '', song.lyrics, 1)
+            lyrics = re.sub(r'\d*Embed$', '', lyrics)
+            return lyrics.strip()
+    except Exception as e:
+        log_message(f"✗ Genius API error: {e}")
+    return None
+
+
+def try_direct_url(session, site, artist, title):
+    """Constructs and tests a direct URL for a given site."""
+    log_message(f"--- Trying Direct URL for {site} ---")
+
+    slug_artist = slugify(artist)
+    slug_title = slugify(title)
+
+    if not slug_artist or not slug_title:
+        return None
+
+    url_formats = {
+        "genius.com": f"https://genius.com/{slug_artist}-{slug_title}-lyrics",
+        "musixmatch.com": f"https://www.musixmatch.com/lyrics/{slug_artist}/{slug_title}",
+        "lyrics.lyricfind.com": f"https://lyrics.lyricfind.com/lyrics/{slug_artist}-{slug_title}"
+    }
+
+    direct_url = url_formats.get(site)
+    if not direct_url:
+        return None
+
+    log_message(f"Testing direct URL: {direct_url}")
+    try:
+        # Use a HEAD request for speed - we only need to know if the page exists.
+        response = session.head(direct_url, timeout=10, allow_redirects=True)
+        if response.status_code == 200:
+            log_message("✓ Direct URL is valid.")
+            return direct_url
+        else:
+            log_message(f"✗ Direct URL failed (Status: {response.status_code}).")
+            return None
+    except requests.RequestException:
+        log_message("✗ Direct URL failed (Connection Error).")
+        return None
+
+
+def search_fallback(session, site, artist, title):
+    """Scrapes Bing as a fallback to find the most relevant URL."""
+    log_message(f"--- Fallback Search for {site} ---")
     query = f'site:{site} "{artist}" "{title}" lyrics'
-    search_url = f"https://www.startpage.com/sp/search?q={requests.utils.quote(query)}"
+    search_url = f"https://www.bing.com/search?q={requests.utils.quote(query)}"
     log_message(f"Searching with query: {search_url}")
-
     time.sleep(random.uniform(1.5, 3.0))
 
     try:
@@ -70,59 +116,42 @@ def get_search_url(session, site, artist, title):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        link_tags = soup.select("a.result-link")
+        link_tags = soup.select("li.b_algo h2 a")
         if not link_tags:
-            log_message("✗ Direct scrape: No result links found on page.")
+            log_message("✗ Fallback scrape: No result links found on page.")
             return None
-
-        # Prepare artist and title for smarter URL matching
-        url_artist = re.sub(r"[^\w]", "", artist).lower()
-        url_title = re.sub(r"[^\w]", "", title).lower()
 
         for link in link_tags:
             url = link.get('href')
             if url and url.startswith('http') and site in url:
-                lower_url = url.lower()
-                # *** THIS IS THE FIX: High-confidence matching logic ***
-                # Check if the URL contains the artist and title, and isn't an album/artist page.
-                if (url_artist in re.sub(r"[^\w]", "", lower_url) and
-                        url_title in re.sub(r"[^\w]", "", lower_url) and
-                        "album" not in lower_url and
-                        "/artist/" not in lower_url):
-                    log_message(f"✓ Found HIGH-CONFIDENCE URL: {url}")
-                    return url  # Return the first good match
+                log_message(f"✓ Found potential URL via fallback: {url}")
+                return url  # Return the first result as the best guess
 
-        log_message(f"✗ No high-confidence URL found for the site '{site}'.")
-
+        log_message(f"✗ Fallback scrape: No links found for '{site}'.")
     except Exception as e:
-        log_message(f"Error during direct scrape: {e}")
+        log_message(f"Error during fallback scrape: {e}")
     return None
 
 
 def scrape_lyrics(session, url):
-    """Scrapes lyrics from a given URL using the provided session."""
+    """Scrapes lyrics from a given URL."""
     try:
         response = session.get(url, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Try Genius structure first
-        lyrics_divs = soup.select("div[data-lyrics-container='true']")
-        if lyrics_divs:
-            lyrics_text = "\n".join([div.get_text(separator='\n') for div in lyrics_divs]).strip()
-            return re.sub(r'(\[.*?\]|\n\s*\n)', lambda m: '' if m.group(0).startswith('[') else '\n',
-                          lyrics_text).strip()
+        lyrics_text = ""
+        if "genius.com" in url:
+            lyrics_divs = soup.select("div[data-lyrics-container='true']")
+            if lyrics_divs: lyrics_text = "\n".join([div.get_text(separator='\n') for div in lyrics_divs])
+        elif "musixmatch.com" in url:
+            lyrics_p = soup.select("p.mxm-lyrics__content")
+            if lyrics_p: lyrics_text = "\n".join([p.get_text(separator='\n') for p in lyrics_p])
+        elif "lyrics.lyricfind.com" in url:
+            lyrics_div = soup.find("div", id="lyrics")
+            if lyrics_div: lyrics_text = lyrics_div.get_text(separator='\n')
 
-        # Try Musixmatch structure
-        lyrics_p = soup.select("p.mxm-lyrics__content")
-        if lyrics_p:
-            return "\n".join([p.get_text(separator='\n') for p in lyrics_p]).strip()
-
-        # Try LyricFind structure
-        lyrics_div = soup.find("div", id="lyrics")
-        if lyrics_div:
-            return lyrics_div.get_text(separator='\n').strip()
-
+        return re.sub(r'(\[.*?\]|\n\s*\n)', lambda m: '' if m.group(0).startswith('[') else '\n', lyrics_text).strip()
     except Exception as e:
         log_message(f"Error scraping page {url}: {e}")
     return ""
@@ -172,7 +201,6 @@ def get_audio_info(audio_path):
 
 
 def has_embedded_lyrics(file_path):
-    """Checks if a music file already has embedded lyrics."""
     try:
         ext = os.path.splitext(file_path)[1].lower()
         if ext == '.mp3':
@@ -193,7 +221,6 @@ def has_embedded_lyrics(file_path):
 
 
 def embed_lyrics_into_file(file_path, lyrics):
-    """Embeds lyrics into the metadata of a music file."""
     try:
         ext = os.path.splitext(file_path)[1].lower()
         if ext == '.mp3':
@@ -220,19 +247,17 @@ def embed_lyrics_into_file(file_path, lyrics):
         return False
 
 
-def process_audio_worker(folder, save_lrc, embed_lyrics, skip_existing):
+def process_audio_worker(folder, save_lrc, embed_lyrics, skip_existing, api_key):
     if not save_lrc and not embed_lyrics:
         log_message("No output options selected. Nothing to do.")
         message_queue.put("TASK_COMPLETE");
         return
 
-    # Create a single session for the entire worker to maintain cookies and a consistent identity.
     with requests.Session() as session:
         session.headers.update(get_random_headers())
 
         audio_files = [os.path.join(r, f) for r, _, fs in os.walk(folder) for f in fs if
                        f.lower().endswith(SUPPORTED_EXTENSIONS) and not f.startswith('._')]
-
         if not audio_files:
             log_message(f"No supported audio files found in '{folder}'.")
             message_queue.put("TASK_COMPLETE");
@@ -253,22 +278,25 @@ def process_audio_worker(folder, save_lrc, embed_lyrics, skip_existing):
 
             log_message(f"Searching for: {artist} - {title}")
             lyrics, source = "", ""
-            SITES_TO_TRY = ["genius.com", "musixmatch.com", "lyrics.lyricfind.com"]
 
-            for site in SITES_TO_TRY:
-                log_message(f"--- Trying Source: {site} ---")
-                found_url = get_search_url(session, site, artist, title)
+            if api_key:
+                lyrics = search_genius_api(artist, title, api_key)
+                if lyrics: source = "Genius API"
 
-                if found_url:
-                    # Genius URLs are special and must contain "-lyrics" to be valid
-                    if site == "genius.com" and "-lyrics" not in found_url:
-                        log_message(f"✗ Found Genius URL is not a valid lyrics page: {found_url}")
-                        continue  # Move to the next site
+            if not lyrics:
+                SITES_TO_TRY = ["genius.com", "musixmatch.com", "lyrics.lyricfind.com"]
+                for site in SITES_TO_TRY:
+                    # First, try the direct URL method
+                    found_url = try_direct_url(session, site, artist, title)
+                    # If that fails, fall back to Bing search
+                    if not found_url:
+                        found_url = search_fallback(session, site, artist, title)
 
-                    lyrics = scrape_lyrics(session, found_url)
-                    if lyrics:
-                        source = site.split('.')[0].capitalize()
-                        break  # Found lyrics, so we can stop searching
+                    if found_url:
+                        lyrics = scrape_lyrics(session, found_url)
+                        if lyrics:
+                            source = site.split('.')[0].capitalize() + " Scraper"
+                            break
 
             if lyrics:
                 log_message(f"✓ Success! Lyrics found via {source}.")
@@ -296,7 +324,7 @@ class LyricsScraperApp:
     def __init__(self, master):
         self.master = master
         master.title("Lyrics Scraper")
-        master.geometry("700x550")
+        master.geometry("700x600")
         self.processing_thread = None
 
         top_frame = tk.Frame(master)
@@ -306,6 +334,12 @@ class LyricsScraperApp:
         tk.Entry(top_frame, textvariable=self.folder_path, state='readonly').pack(side='left', expand=True, fill='x',
                                                                                   padx=5)
         tk.Button(top_frame, text="Browse...", command=self.browse_folder).pack(side='left')
+
+        api_frame = tk.LabelFrame(master, text="Genius API (Recommended)", padx=5, pady=5)
+        api_frame.pack(pady=5, padx=10, fill='x')
+        tk.Label(api_frame, text="API Key:").pack(side='left', padx=(0, 5))
+        self.api_key = tk.StringVar()
+        tk.Entry(api_frame, textvariable=self.api_key, width=60).pack(side='left', expand=True, fill='x')
 
         options_frame = tk.Frame(master)
         options_frame.pack(pady=10, padx=10, fill='x')
@@ -320,7 +354,7 @@ class LyricsScraperApp:
 
         button_frame = tk.Frame(master)
         button_frame.pack(pady=5)
-        self.start_button = tk.Button(button_frame, text="Start Scraping", command=self.start_scraping)
+        self.start_button = tk.Button(button_frame, text="Start Processing", command=self.start_scraping)
         self.start_button.pack(side='left', padx=5)
         self.stop_button = tk.Button(button_frame, text="Stop", command=self.stop_scraping, state=tk.DISABLED)
         self.stop_button.pack(side='left', padx=5)
@@ -344,7 +378,7 @@ class LyricsScraperApp:
         if not self.save_lrc.get() and not self.embed_lyrics.get(): messagebox.showwarning("No Output Selected",
                                                                                            "Please select at least one output option."); return
         if self.processing_thread and self.processing_thread.is_alive(): messagebox.showinfo("In Progress",
-                                                                                             "Scraping is already running."); return
+                                                                                             "Processing is already running."); return
 
         self.log_text.config(state='normal');
         self.log_text.delete(1.0, tk.END);
@@ -354,8 +388,9 @@ class LyricsScraperApp:
         self.start_button.config(state=tk.DISABLED);
         self.stop_button.config(state=tk.NORMAL)
 
+        api_key_val = self.api_key.get().strip()
         self.processing_thread = threading.Thread(target=process_audio_worker, args=(
-        self.folder_path.get(), self.save_lrc.get(), self.embed_lyrics.get(), self.skip_existing.get()))
+        self.folder_path.get(), self.save_lrc.get(), self.embed_lyrics.get(), self.skip_existing.get(), api_key_val))
         self.processing_thread.daemon = True
         self.processing_thread.start()
 
@@ -379,9 +414,9 @@ class LyricsScraperApp:
                 self.start_button.config(state=tk.NORMAL)
                 self.stop_button.config(state=tk.DISABLED)
                 if not stop_event.is_set():
-                    messagebox.showinfo("Finished", "The scraping process has completed!")
+                    messagebox.showinfo("Finished", "The process has completed!")
                 else:
-                    messagebox.showinfo("Stopped", "The scraping process was stopped by the user.")
+                    messagebox.showinfo("Stopped", "The process was stopped by the user.")
             else:
                 self.log_message_gui(message)
         self.master.after(100, self.check_queue)
