@@ -1,7 +1,6 @@
 Lyrics Scraper
 A robust, hybrid desktop application to automatically find and save lyrics for your local music collection using both the official Genius API and a powerful scraping engine.
 
-Note: Replace with an updated screenshot of the final UI.
 
 Features
 Hybrid Search: Uses the fast and reliable official Genius API as the primary method and automatically falls back to a powerful scraping engine if no API key is provided.
