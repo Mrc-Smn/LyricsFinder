@@ -28,7 +28,7 @@ If you prefer to run the application from the source code, you will need Python 
 Clone the repository:
 
 git clone https://github.com/Mrc-Smn/LyricsFinder.git
-cd lyrics-scraper
+cd LyricsFinder
 
 Install the required dependencies:
 
